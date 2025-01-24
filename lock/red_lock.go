@@ -68,6 +68,11 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 		go func() {
 			defer wg.Done()
 			<-r.requestSem
+			// After the sem is acquired release it after the operation is done
+			if acquiredCount.Load() == int32(quorum) {
+				close(done)
+				return
+			}
 			acquiredResult := c.SetNX(ctx, key, "1", r.lockDuration)
 			acquireActionStream <- acquireActionOutcome{
 				acquired: acquiredResult.Val(),
