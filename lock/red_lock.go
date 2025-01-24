@@ -41,6 +41,7 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 		acquireActionStream = make(chan acquireActionOutcome)
 		done                = make(chan interface{})
 		wg                  sync.WaitGroup
+		timeoutAfter        <-chan time.Time
 	)
 
 	defer close(acquireActionStream)
@@ -75,6 +76,13 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 		wg.Wait()
 	}()
 
+	_, ok := ctx.Deadline()
+
+	if !ok {
+		// If parent context has no deadline, set a default deadline of 1 minute
+		timeoutAfter = time.After(1 * time.Minute)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -83,7 +91,14 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 			if acquiredCount.Load() == int32(quorum) {
 				return nil
 			}
+			return ErrUnableToAcquireLock
+		case <-timeoutAfter:
+			if acquiredCount.Load() == int32(quorum) {
+				return nil
+			}
+			return ErrUnableToAcquireLock
 		}
+
 	}
 }
 
