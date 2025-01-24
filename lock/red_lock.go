@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/sirupsen/logrus"
 )
 
 type redLock struct {
@@ -41,11 +42,15 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 		acquireActionStream = make(chan acquireActionOutcome)
 		done                = make(chan interface{})
 		wg                  sync.WaitGroup
-		timeoutAfter        <-chan time.Time
 	)
 
 	defer close(acquireActionStream)
 
+	_, ok := ctx.Deadline()
+	if !ok {
+		logrus.Error(ErrContextWithDeadlineNeeded.Error())
+		return ErrContextWithDeadlineNeeded
+	}
 	go func() {
 		for val := range acquireActionStream {
 			if val.acquired {
@@ -74,25 +79,21 @@ func (r *redLock) Acquire(ctx context.Context, key string) error {
 
 	go func() {
 		wg.Wait()
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		default:
+			close(done)
+		}
 	}()
-
-	_, ok := ctx.Deadline()
-
-	if !ok {
-		// If parent context has no deadline, set a default deadline of 1 minute
-		timeoutAfter = time.After(1 * time.Minute)
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-done:
-			if acquiredCount.Load() == int32(quorum) {
-				return nil
-			}
-			return ErrUnableToAcquireLock
-		case <-timeoutAfter:
 			if acquiredCount.Load() == int32(quorum) {
 				return nil
 			}
